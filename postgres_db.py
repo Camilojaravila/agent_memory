@@ -2,10 +2,6 @@ import os
 from dotenv import load_dotenv
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
-from langchain_community.chat_message_histories import (
-    PostgresChatMessageHistory,
-)
-from psycopg2 import pool
 from langchain_postgres import PostgresChatMessageHistory
 
 
@@ -24,6 +20,8 @@ db_pool = ConnectionPool(
     min_size=1,
     max_size=10,
 )
+
+checkpoint = PostgresSaver(db_pool)
 
 def get_db():
     """Yields a persistent database connection from the pool."""

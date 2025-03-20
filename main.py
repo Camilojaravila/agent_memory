@@ -2,9 +2,9 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
-import agent
+from chatbot import get_response, get_history, get_session_ids, get_steps
 import schema
-#import chatbot
+import traceback
 
 tags_metadata = [
     {
@@ -17,7 +17,7 @@ tags_metadata = [
     },
 ]
 
-version = "0.0.1"
+version = "0.1.1"
 
 app = FastAPI(
     openapi_tags=tags_metadata,
@@ -37,54 +37,40 @@ app.add_middleware(
 async def new_session():
     """Creates a new session and returns the session ID."""
     session_id = str(uuid4())
-    agent.get_by_session_id(session_id)
     return JSONResponse({"session_id": session_id})
 
-@app.post("/chat/{session_id}", tags=["Agent"])
-async def chat(session_id: str, chat_request: schema.ChatRequest):
-    """Handles chat requests."""
+@app.post("/chat/", tags=["Chatbot"], response_model=schema.ChatResponse)
+async def chat(request: schema.ChatRequest):
     try:
-        message = chat_request.message
-        response = agent.call_model(message, session_id)
-        return JSONResponse({"response": response})
+        final_response = get_response(request.user_input, request.session_id)
+        if not final_response:
+            raise HTTPException(status_code=500, detail="No assistant response received.")
+        return {"assistant_response": final_response[-1]['assistant_response'], "nodes": final_response}
+
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/history/{session_id}", tags=["Chatbot"])
+async def get_chat_history(session_id: str):
+    try:
+        history = get_history(session_id)
+        return history
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/steps/{session_id}", tags=["Chatbot"])
+async def get_graph_steps(session_id: str):
+    try:
+        history = get_steps(session_id)
+        return history
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/history",  tags=["Agent"])
-async def get_chats():
-    """Retrieves all the ID stored."""
-    sessions = agent.get_session_ids()
-    print(sessions)
-    return JSONResponse({"ids": [str(s) for s in  sessions]})
-
-@app.get("/history/{session_id}",  tags=["Agent"])
-async def get_messages(session_id: str):
-    """Retrieves the chat history for a session."""
-    #if session_id not in agent.store:
-    #    raise HTTPException(status_code=404, detail="Session not found")
-
-    memory = agent.get_by_session_id(session_id)
-
-    return JSONResponse({"history": [message.to_json() for message in memory.get_messages()]})
-
-'''
-
-@app.post("/chatbot/{session_id}", tags=["Chatbot"])
-async def interact_with_chatbot(chat_request: schema.ChatRequest, session_id: str):
-    """Processes a chatbot message."""
+@app.get("/sessions/", tags=["Chatbot"], response_model=schema.SessionList)
+async def get_sessions():
     try:
-        response = chatbot.stream_graph_updates(chat_request.message, session_id)
-        return JSONResponse({"messages": response})
+        sessions = get_session_ids()
+        return {"session_ids": sessions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/chatbot/{session_id}/history", tags=["Chatbot"])
-async def get_history(session_id: str):
-    """Retrieves chatbot session history."""
-    try:
-        history = chatbot.get_history(session_id)
-        serializable_history = [message.dict() for message in history.values["messages"]]
-        return JSONResponse({"messages": serializable_history})
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
-'''

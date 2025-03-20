@@ -1,14 +1,10 @@
-import uuid
 from typing import Dict, List
 from google.oauth2 import service_account
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import START, MessagesState, StateGraph
-
-from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables.history import RunnableWithMessageHistory
-
 import postgres_db
+
 
 """
 # Load the service account key file
@@ -20,8 +16,6 @@ credentials = service_account.Credentials.from_service_account_info(
     service_account_info
 )
 """
-# Define a new graph
-builder = StateGraph(state_schema=MessagesState)
 
 # Define the Gemini model
 llm = ChatGoogleGenerativeAI(
@@ -29,6 +23,11 @@ llm = ChatGoogleGenerativeAI(
     temperature=0.1
 )
 
+llm_json_mode = ChatGoogleGenerativeAI(
+    model="gemini-2.0-flash",
+    temperature=0.1,
+    format="json"
+)
 
 class PostgresChatHistory():
     """Postgres-backed chat message history using LangChain's PostgresChatMessageHistory."""
@@ -67,6 +66,7 @@ chain_with_history = RunnableWithMessageHistory(
     get_by_session_id,
 )
 
+
 def call_model(message: str, session_id: str) -> list[BaseMessage]:
     # RunnableWithMessageHistory takes care of reading the message history
     # and updating it with the new human message and ai response.
@@ -74,7 +74,12 @@ def call_model(message: str, session_id: str) -> list[BaseMessage]:
     input_message = HumanMessage(message)
     ai_message: AIMessage = chain_with_history.invoke(input_message, config)
 
-    return ai_message.content
+    return ai_message
 
 def get_session_ids():
     return postgres_db.get_all_sessions()
+
+def get_chat_messages(session_id: str) -> List[BaseMessage]:
+    """Retrieves the chat history messages from Postgres based on session_id."""
+    chat_history = get_by_session_id(session_id)
+    return chat_history.messages
