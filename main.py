@@ -2,26 +2,31 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from uuid import uuid4
-from chatbot import get_response, get_history, get_session_ids, get_steps
+#from alloy_db import init_tables, close_connection
+import chatbot
 import schema
 import traceback
+from contextlib import asynccontextmanager
+
 
 tags_metadata = [
     {
-        "name": "Agent",
+        "name": "Conversations",
         "description": "Agent services.",
     },
     {
-        "name": "Chatbot",
-        "description": "Chatbot services.",
+        "name": "Messages",
+        "description": "Message services.",
     },
 ]
 
-version = "0.1.1"
+version = "1.0.0"
+
 
 app = FastAPI(
     openapi_tags=tags_metadata,
-    version=version)
+    version=version,
+    )
 
 # CORS middleware for allowing requests from your frontend
 app.add_middleware(
@@ -33,44 +38,65 @@ app.add_middleware(
 )
 
 
-@app.post("/new_session", tags=["Agent"])
-async def new_session():
+@app.get("/api/conversations/{user_id}", tags=["Conversations"], response_model=schema.SessionList)
+async def get_conversations(user_id: str):
+    """
+    Get all the session ids for conversations from the user.
+    """
+    try:
+        sessions = chatbot.get_session_ids(user_id)
+        return {"session_ids": sessions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/conversations/{user_id}", tags=["Conversations"])
+async def new_conversation(user_id: str):
     """Creates a new session and returns the session ID."""
     session_id = str(uuid4())
-    return JSONResponse({"session_id": session_id})
+    user_session = chatbot.get_new_session_id(session_id=session_id, user_id=user_id)
+    return JSONResponse({"session_id": str(user_session.session_id), "user_id": user_session.user_id})
 
-@app.post("/chat/", tags=["Chatbot"], response_model=schema.ChatResponse)
+@app.delete("/api/conversations/{session_id}", tags=["Conversations"])
+async def delete_conversation(session_id: str):
+    """Delete the conversation from the user."""
+    conversation = chatbot.delete_conversation(session_id)
+    return f"The conversation {conversation.session_id} has been deleted"
+
+@app.post("/api/messages/chat/", tags=["Messages"], response_model=schema.ChatResponse)
 async def chat(request: schema.ChatRequest):
     try:
-        final_response = get_response(request.user_input, request.session_id)
+        final_response = chatbot.get_response(request.user_input, request.session_id)
         if not final_response:
             raise HTTPException(status_code=500, detail="No assistant response received.")
+        chatbot.update_timestamp(request.session_id)
         return {"assistant_response": final_response[-1]['assistant_response'], "nodes": final_response}
 
     except Exception as e:
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/history/{session_id}", tags=["Chatbot"])
+@app.get("/api/messages/chat/{session_id}", tags=["Messages"])
 async def get_chat_history(session_id: str):
     try:
-        history = get_history(session_id)
+        history = chatbot.get_history(session_id)
         return history
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.put("/api/messages/update/", tags=["Messages"])
+async def update_message(body: schema.MessageUpdate):
+    try:
+        info = body.__dict__
+        return chatbot.update_message(info)
+    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/steps/{session_id}", tags=["Chatbot"])
 async def get_graph_steps(session_id: str):
     try:
-        history = get_steps(session_id)
+        history = chatbot.get_steps(session_id)
         return history
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/sessions/", tags=["Chatbot"], response_model=schema.SessionList)
-async def get_sessions():
-    try:
-        sessions = get_session_ids()
-        return {"session_ids": sessions}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

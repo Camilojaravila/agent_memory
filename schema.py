@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 class ChatRequest(BaseModel):
@@ -12,3 +12,10 @@ class ChatResponse(BaseModel):
 
 class SessionList(BaseModel):
     session_ids: List[UUID]
+
+
+class MessageUpdate(BaseModel):
+    message_id: str
+    like: bool = True,
+    feedbacks: List[str]
+    observation: Optional[str]

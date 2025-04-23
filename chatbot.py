@@ -1,9 +1,10 @@
 from langgraph.graph import StateGraph, END, START
 import agent  # Import the graph builder from agent.py
-from postgres_db import checkpoint
+import connection
 from chatbot_schemas import Route, State, List_Formula
 import prompts
 import formulas  # Import the formulas module
+from helpers import time_now
 
 # Augment the LLM with schema for structured output
 router = agent.llm.with_structured_output(Route)
@@ -20,6 +21,7 @@ def chatbot(state: State):
     for message in messages:
         if isinstance(message, agent.HumanMessage):
             llm_messages.append(message)
+            break
         elif isinstance(message, agent.SystemMessage) and message.content:  # Check if SystemMessage has content
             llm_messages.append(message)
 
@@ -114,7 +116,7 @@ builder.add_edge("chatbot", END)
 
 
 # Compile the graph using the builder from agent.py
-graph = builder.compile(checkpointer=checkpoint)
+graph = builder.compile(checkpointer=agent.checkpoint)
 
         
 def stream_graph_updates(user_input: str, session_id: str):
@@ -128,11 +130,12 @@ def stream_graph_updates(user_input: str, session_id: str):
                     last_message = value["messages"][-1]
                 else:
                     last_message = value["messages"]
-
                 if hasattr(last_message, 'content'):
                     yield {"assistant_response": last_message.content}
                 elif isinstance(last_message, dict) and "content" in last_message:
                     yield {"assistant_response": last_message["content"]}
+                elif isinstance(last_message, str):
+                    yield {"assistant_response": last_message}
                 else:
                     yield {"assistant_response": "(Unexpected response format)"}
             elif "decision" in value: #check if decision key exists
@@ -156,5 +159,31 @@ def get_steps(session_id: str):
 def get_history(session_id: str):
     return agent.get_chat_messages(session_id)
 
-def get_session_ids():
-    return agent.get_session_ids()
+def get_session_ids(user_id: str):
+    sessions = connection.get_sessions_by_user(user_id)
+    
+    return [s.session_id for s in sessions]
+
+def get_new_session_id(**kwargs):
+    data = dict(**kwargs)
+    return connection.create_session(data)
+
+def update_timestamp(session_id: str):
+    info = {
+        'updated_at': time_now()
+    }
+
+    connection.update_user_session(session_id, info)
+
+def delete_conversation(session_id: str):
+    info = {
+        'is_active': False
+    }
+
+    return connection.update_user_session(session_id, info)
+
+def update_message(info):
+
+    info['created_at'] = time_now()
+
+    return connection.create_message_revision(info)

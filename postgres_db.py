@@ -3,6 +3,10 @@ from dotenv import load_dotenv
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
 from langchain_postgres import PostgresChatMessageHistory
+from langchain_core.messages import BaseMessage
+from typing import List
+from sqlalchemy import create_engine, text
+from models import create_tables
 
 
 load_dotenv('.env')
@@ -13,15 +17,67 @@ connection_kwargs = {
     "prepare_threshold": 0,
 }
 
-table_name = "chat_history"
+table_name = os.getenv('TABLE_HISTORY_NAME')
 
 db_pool = ConnectionPool(
     conninfo=DB_URI,
     min_size=1,
     max_size=10,
+    kwargs=connection_kwargs
 )
 
+
 checkpoint = PostgresSaver(db_pool)
+
+
+def init_tables():
+    """
+    Initialize the tables to store for the checkpoint, the Message history and the Vector Store (not implemented)
+    
+    Uses env variables of TABLE_CHECKPOINT_NAME, TABLE_HISTORY_NAME, TABLE_VECTOR_NAME
+    """
+    checkpoint.setup()
+    
+    db_conn = next(get_db())
+    try:
+        PostgresChatMessageHistory.create_tables(db_conn, table_name)
+    finally:
+        db_conn.close()
+    engine = get_db_engine()
+    create_tables(engine)
+
+
+
+
+class PostgresChatHistory():
+    """Postgres-backed chat message history using LangChain's PostgresChatMessageHistory."""
+
+    def __init__(self, session_id:str):
+        history = init_memory(session_id)
+        self.chat_history = history
+
+    def add_messages(self, messages: List[BaseMessage]) -> None:
+        """Stores messages in the Postgres database"""
+        for message in messages:
+            self.chat_history.add_message(message)
+
+    def get_messages(self) -> List[BaseMessage]:
+        """Retrieves messages from the database"""
+        return self.chat_history.messages
+    
+    @property
+    def messages(self) -> List[BaseMessage]:
+        """Retrieves messages from the database."""
+        return self.chat_history.get_messages()  # Ensure it returns a list of BaseMessage objects
+
+    def clear(self) -> None:
+        """Deletes chat history for a session"""
+        self.chat_history.clear()
+
+
+def get_by_session_id(session_id: str) -> PostgresChatHistory:
+    """Retrieve chat history from Postgres based on session_id."""
+    return PostgresChatHistory(session_id=session_id)
 
 def get_db():
     """Yields a persistent database connection from the pool."""
@@ -43,12 +99,20 @@ def init_memory(session_id: str) -> PostgresChatMessageHistory:
     )
     return chat_history
 
+def get_db_engine():
+    """Creates a SQLAlchemy engine for database operations."""
+
+    return create_engine(DB_URI)
 
 def get_all_sessions():
     db_conn = next(get_db())
     """Retrieve all unique session_ids from the chat history table."""
-    query = "SELECT DISTINCT session_id FROM chat_history;"
+
+    query = f"SELECT DISTINCT session_id FROM {table_name};"
     with db_conn.cursor() as cursor:
         cursor.execute(query)
         session_ids = [row[0] for row in cursor.fetchall()]
+
     return session_ids
+
+init_tables()
