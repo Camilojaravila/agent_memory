@@ -5,20 +5,44 @@ from weaviate.classes.query import Filter
 from weaviate.classes.init import AdditionalConfig, Timeout
 from langchain_weaviate.vectorstores import WeaviateVectorStore
 import os
-
+import json
 from google.auth.transport.requests import Request
 from google.oauth2.service_account import Credentials
-
+from google.cloud import secretmanager
 from fastapi import Depends
+from google.oauth2 import service_account
 
 
 wcd_url = os.environ["WCD_URL"]
 wcd_api_key = os.environ["WCD_API_KEY"]
 
+# Load the service account key file
+with open(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'), "r") as f:
+    service_account_info = json.load(f)
 
-def get_credentials() -> Credentials:
-        credentials = Credentials.from_service_account_file(
-            "niilo-441811-032714d1b5e6.json",
+# Create credentials
+credentials = service_account.Credentials.from_service_account_info(
+    service_account_info
+)
+
+
+def get_credentials_from_secret_manager() -> Credentials:
+    """Retrieves service account credentials from Google Cloud Secret Manager."""
+    secret_name = os.environ.get("WCD_CRED_SECRET_NAME", "your-wcd-credentials-secret-name") # Get the secret name from an env variable
+    client = secretmanager.SecretManagerServiceClient()
+    project_id = os.environ.get("GOOGLE_PROJECT_ID")  # Ensure you have your GCP project ID as an env variable
+    if not project_id:
+        raise ValueError("GOOGLE_PROJECT_ID environment variable not set.")
+
+    secret_version_name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+
+    try:
+        response = client.access_secret_version(request={"name": secret_version_name})
+        secret_content = response.payload.data.decode("utf-8")
+        # Assuming your secret content is a JSON key file
+        credentials_info = json.loads(secret_content)
+        credentials = Credentials.from_service_account_info(
+            credentials_info,
             scopes=[
                 "https://www.googleapis.com/auth/generative-language",
                 "https://www.googleapis.com/auth/cloud-platform",
@@ -27,8 +51,13 @@ def get_credentials() -> Credentials:
         request = Request()
         credentials.refresh(request)
         return credentials
+    except Exception as e:
+        print(f"Error accessing secret '{secret_name}': {e}")
+        # Handle the error appropriately, perhaps by raising it
+        raise
 
-credentials = get_credentials()
+
+credentials = get_credentials_from_secret_manager()
 token = credentials.token
 
 

@@ -115,4 +115,4 @@ def get_all_sessions():
 
     return session_ids
 
-init_tables()
+#init_tables()
