@@ -16,14 +16,17 @@ from google.oauth2 import service_account
 wcd_url = os.environ["WCD_URL"]
 wcd_api_key = os.environ["WCD_API_KEY"]
 
-# Load the service account key file
-with open(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'), "r") as f:
-    service_account_info = json.load(f)
+try:
+    # Load the service account key file
+    with open(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'), "r") as f:
+        service_account_info = json.load(f)
 
-# Create credentials
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info
-)
+    # Create credentials
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info
+    )
+except:
+    pass
 
 
 def get_credentials_from_secret_manager() -> Credentials:
