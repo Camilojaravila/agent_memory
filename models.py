@@ -11,7 +11,7 @@ class UserSession(Base):
     __tablename__ = 'user_sessions'
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, nullable=False)
+    user_id = Column(String, nullable=False)
     session_id = Column(Uuid, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
