@@ -7,6 +7,7 @@ import chatbot
 import schema
 import traceback
 from contextlib import asynccontextmanager
+from weaviate_db import connect_to_db, close_db
 
 
 tags_metadata = [
@@ -20,12 +21,28 @@ tags_metadata = [
     },
 ]
 
-version = "1.1.1"
+version = "1.2.0"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        connect_to_db()
+        print("Weaviate client connected successfully.")
+        yield
+    except Exception as e:
+        print(f"Error connecting to Weaviate: {e}")
+        # Optionally, you might want to handle this error more gracefully,
+        # perhaps by setting a flag and checking it in your API endpoints.
+    finally:
+        close_db()
+        print("Weaviate client closed.")
 
 
 app = FastAPI(
     openapi_tags=tags_metadata,
     version=version,
+    lifespan=lifespan
     )
 
 # CORS middleware for allowing requests from your frontend

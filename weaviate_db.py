@@ -16,6 +16,9 @@ from google.oauth2 import service_account
 wcd_url = os.environ["WCD_URL"]
 wcd_api_key = os.environ["WCD_API_KEY"]
 
+# Weaviate client instance
+weaviate_client: WeaviateClient = None
+
 try:
     # Load the service account key file
     with open(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'), "r") as f:
@@ -63,16 +66,28 @@ def get_credentials_from_secret_manager() -> Credentials:
 credentials = get_credentials_from_secret_manager()
 token = credentials.token
 
+def connect_to_db():
+    global weaviate_client
+
+    weaviate_client = connect_to_weaviate_cloud(
+            cluster_url=wcd_url,
+            auth_credentials=Auth.api_key(wcd_api_key),
+            headers={'X-Goog-Vertex-Api-Key': token},
+            additional_config=AdditionalConfig(
+                timeout=Timeout(init=300, query=120, insert=240)
+            )
+        )
 
 def get_weaviate_retriever(embeddings):
-    with connect_to_weaviate_cloud(
-                cluster_url=wcd_url,
-                auth_credentials=Auth.api_key(wcd_api_key),
-                headers={'X-Goog-Vertex-Api-Key': token},
-                additional_config=AdditionalConfig(
-                    timeout=Timeout(init=300, query=120, insert=240)
-                )
-            ) as client:
-        vectorstore = WeaviateVectorStore(client, "Rag", "content", embedding=embeddings)
-        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+    global weaviate_client
+    vectorstore = WeaviateVectorStore(weaviate_client, "Rag", "content", embedding=embeddings)
+    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
     return retriever
+
+
+def close_db():
+    global weaviate_client
+    if weaviate_client:
+            weaviate_client.close()
+
+connect_to_db()
