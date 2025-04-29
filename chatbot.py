@@ -1,155 +1,294 @@
 from langgraph.graph import StateGraph, END, START
-import agent  # Import the graph builder from agent.py
-import connection
-from chatbot_schemas import Route, State, List_Formula
-import prompts
-import formulas  # Import the formulas module
+from typing import List, Optional
+import agent, connection, formulas, prompts
+from chatbot_schemas import State, RouterOutput, FormulaInfo, ExtractedParams, List_Formula
 from helpers import time_now
-
-# Augment the LLM with schema for structured output
-router = agent.llm.with_structured_output(Route)
-formula_params = agent.llm.with_structured_output(List_Formula)
-
-
-def chatbot(state: State):
-    messages = state["messages"][-2:]
-    session_id = state["messages"][0].additional_kwargs["session_id"]
-    formulas_list = state.get("formulas")
-
-    # Filter and format messages for LLM input
-    llm_messages = []
-    for message in messages:
-        if isinstance(message, agent.HumanMessage):
-            llm_messages.append(message)
-            break
-        elif isinstance(message, agent.SystemMessage) and message.content:  # Check if SystemMessage has content
-            llm_messages.append(message)
-
-    # Construct the message string for the LLM
-    message_content = ""
-    for msg in llm_messages:
-      message_content += msg.content + "\n"
-
-    if formulas_list:
-        message_content += "\nFormulas found:\n"
-        for formula in formulas_list:
-            message_content += f"- {formula.name}: {formula.params}\n"
-
-    return {"messages": agent.call_model(message_content, session_id)}
+from langchain_core.messages import HumanMessage
+from uuid import uuid4
+from formulas import formulas_list
+import json
 
 
+def get_last_human_message(messages: List[agent.BaseMessage]) -> Optional[str]:
+    """Extrae el contenido del último mensaje humano."""
+    for msg in reversed(messages):
+        if isinstance(msg, agent.HumanMessage):
+            return msg.content
+    return None
 
-def make_calculations(state: State):
-    user_message = state["messages"][-1]
-    session_id = state["messages"][0].additional_kwargs["session_id"]
-    # Use LLM to extract formula and parameters
-    calculation_request: List_Formula = formula_params.invoke(
-        [
-            prompts.prompt_calculation,
-            user_message,
-        ]
-    )
-    results = []
-    missing_params = {}
+def route_request(state: State) -> dict:
+    """Nodo Router: Decide si ir a 'formula' o 'chatbot'."""
+    print("--- Ejecutando Nodo: route_request ---")
+    last_human_message = get_last_human_message(state['messages'])
 
-    for formula_item in calculation_request.formulas:
-        formula_name = formula_item.key.lower()  # Use formula_item.key instead of name.lower()
-        required_params = {param.lower(): None for param in formulas.formulas_list[formulas.formula_names.index(formula_item.key)]["params"]} #gets the required params from the formulas_list
-        provided_params = {k.lower(): v for k, v in {p.lower(): None for p in formula_item.params}.items()} #gets the provided params.
+    if not last_human_message:
+        print("Advertencia: No se encontró mensaje humano para el routing. Defecto: chatbot.")
+        return {"decision": "chatbot"}
 
-        all_params_present = True
-        for param in required_params:
-            if param not in provided_params:
-                all_params_present = False
-                if formula_name not in missing_params:
-                    missing_params[formula_name] = []
-                missing_params[formula_name].append(param)
-            else:
-                required_params[param] = provided_params[param]
+    # Usa LLM estructurado para tomar la decisión
+    router_runnable = prompts.prompt_router | agent.llm_structured.with_structured_output(RouterOutput)
+    try:
+        routing_decision: RouterOutput = router_runnable.invoke({"question": last_human_message})
+        print(f"Decisión del Router: {routing_decision.decision}")
+        return {"decision": routing_decision.decision}
+    except Exception as e:
+        print(f"Error durante el routing: {e}. Defecto: chatbot.")
+        return {"decision": "chatbot"} # Fallback seguro
 
-        if all_params_present:
-            result = formulas.calculate_formula(formula_name, required_params)
-            if result is not None:
-                results.append(f"{formula_item.name}: {result}")
-            else:
-                results.append(f"Could not calculate {formula_item.name}.")
-        else:
-            results.append(f"Missing parameters for {formula_item.name}.")
+def analyze_formulas_node(state: State) -> dict:
+    """Nodo Análisis Fórmulas: Identifica fórmulas y la intención (calc/info)."""
+    print("--- Ejecutando Nodo: analyze_formulas_node ---")
+    last_human_message = get_last_human_message(state['messages'])
+    analyzed_formulas_list: List[FormulaInfo] = [] # Especifica el tipo esperado
 
-    if missing_params:
-        missing_params_message = "Por favor necesito los siguientes parámetros:\n"
-        for formula, params in missing_params.items():
-            missing_params_message += f"{formula}: {', '.join(params)}\n"
-        return {"messages": [{"role": "system", "content": missing_params_message}], "formulas": calculation_request.formulas} #Added the formulas in the state.
+    if not last_human_message:
+        print("Advertencia: No se encontró mensaje humano para analizar fórmulas.")
     else:
-        return {"messages": [{"role": "system", "content": "\n".join(results)}], "formulas": calculation_request.formulas} #Added the formulas in the state.
+        # Prepara el diccionario de entrada con AMBAS variables requeridas por el prompt
+        input_data_for_prompt = {
+            "question": last_human_message,
+            "formulas_json": str(formulas_list) # Convierte la lista real a string JSON aquí
+        }
+        print(f"Input para prompt_formula_analysis: {input_data_for_prompt.keys()}") # Debug
+
+        # Construye el runnable (asegúrate que List[FormulaInfo] esté bien importado/definido)
+        # Si usas Python < 3.9, usa typing.List[FormulaInfo]
+        analysis_runnable = prompts.prompt_formula_analysis | agent.llm_structured.with_structured_output(List_Formula)
+
+        try:
+            # Invoca el runnable con el diccionario de entrada completo
+            analysis_result = analysis_runnable.invoke(input_data_for_prompt)
+
+            # Procesa el resultado (debería ser List[FormulaInfo])
+            if isinstance(analysis_result, list):
+                # Validación adicional opcional (ej: asegurar que los items son FormulaInfo)
+                analyzed_formulas_list = [f for f in analysis_result if isinstance(f, FormulaInfo)]
+                print(f"Fórmulas Analizadas (tipo {type(analysis_result)}): {[f.dict() for f in analyzed_formulas_list]}")
+            else:
+                # Manejar casos donde with_structured_output falle o devuelva otro tipo
+                print(f"Salida inesperada de analysis_runnable: {type(analysis_result)}. Se esperaba List[FormulaInfo].")
+                # Podrías intentar parsear si es un AIMessage con JSON string, como fallback
+                if hasattr(analysis_result, 'content') and isinstance(analysis_result.content, str):
+                    try:
+                        parsed_list = json.loads(analysis_result.content)
+                        validated_formulas = [FormulaInfo(**item) for item in parsed_list]
+                        analyzed_formulas_list = validated_formulas
+                        print(f"Fórmulas Analizadas (parseado de string): {[f.dict() for f in analyzed_formulas_list]}")
+                    except Exception as parse_err:
+                        print(f"Error parseando fallback JSON: {parse_err}")
+                # Si no se puede procesar, la lista quedará vacía
+
+        except Exception as e:
+            print(f"Error durante la invocación/procesamiento del análisis de fórmulas: {e}")
+            import traceback
+            traceback.print_exc()
+            analyzed_formulas_list = [] # Resetea en caso de error
+
+    # Devuelve la lista (posiblemente vacía) al estado
+    return {"analyzed_formulas": analyzed_formulas_list}
+
+def calculation_node(state: State) -> dict:
+    """Nodo Cálculo: Intenta calcular o pide parámetros."""
+    print("--- Ejecutando Nodo: calculation_node ---")
+    analyzed_formulas: List[FormulaInfo] = state.get("analyzed_formulas", [])
+    messages_to_add: List[agent.BaseMessage] = []
+    missing_params_map = {} # { 'formula_key': ['param1', 'param2'] }
+
+    formulas_needing_calc = [f for f in analyzed_formulas if f.is_calculated]
+
+    if not formulas_needing_calc:
+        print("No hay fórmulas marcadas para cálculo. Pasando al chatbot.")
+        # No añadir mensajes, el chatbot se encargará de explicar si es necesario
+        return {}
+
+    # --- Lógica de Extracción de Parámetros ---
+    # Implementación básica: Buscar en el último mensaje (MEJORAR ESTO)
+    last_human_message = get_last_human_message(state['messages']) or ""
+
+    for formula_info in formulas_needing_calc:
+        required = formula_info.params_required
+        provided_values = {} # { 'param_name': value }
+        missing = []
+
+        # AQUÍ VA LA LÓGICA DE EXTRACCIÓN - Ejemplo Placeholder (NO USAR EN PRODUCCIÓN)
+        print(f"Buscando parámetros para {formula_info.key}: {required}")
+        # Intenta extraerlos del último mensaje (esto es muy básico)
+        # Necesitas una estrategia robusta: LLM dedicado, regex, etc.
+        # Por ahora, asumiremos que no se encuentran para forzar la petición
+        for param in required:
+            # if param_found_and_value_extracted(param, last_human_message):
+            #    provided_values[param] = extracted_value
+            # else:
+            missing.append(param) # Asume que falta por ahora
+
+        if not missing:
+             # --- Realizar Cálculo ---
+             try:
+                 # Asegúrate que los valores en provided_values son numéricos
+                 numeric_params = {k: float(v) for k, v in provided_values.items() if v is not None} # Convertir a float
+                 result = formulas.calculate_formula(formula_info.key, numeric_params)
+                 if result is not None:
+                     msg_content = f"Calculé el {formula_info.name} ({formula_info.key}): {result}"
+                     messages_to_add.append(agent.AIMessage(content=msg_content))
+                     print(msg_content)
+                 else:
+                     msg_content = f"No pude calcular el {formula_info.name} ({formula_info.key}) con los datos."
+                     messages_to_add.append(agent.AIMessage(content=msg_content))
+                     print(msg_content)
+             except Exception as e:
+                 print(f"Error calculando {formula_info.key}: {e}")
+                 messages_to_add.append(agent.AIMessage(content=f"Tuve un problema al calcular el {formula_info.name}."))
+        else:
+            # --- Registrar Parámetros Faltantes ---
+            missing_params_map[formula_info.key] = missing
+            print(f"Parámetros faltantes para {formula_info.key}: {missing}")
+
+    # --- Generar Mensaje de Petición de Parámetros (si aplica) ---
+    if missing_params_map:
+        prompt_missing = "Para poder calcular, necesito algunos datos más:\n"
+        for key, params in missing_params_map.items():
+            formula_name = next((f.name for f in analyzed_formulas if f.key == key), key)
+            prompt_missing += f"- Para **{formula_name} ({key})**: {', '.join(params)}\n"
+        prompt_missing += "¿Me los podrías dar?"
+        messages_to_add.append(agent.AIMessage(content=prompt_missing))
+        print("Generando petición de parámetros.")
+
+    # Devuelve los mensajes generados (resultados o peticiones)
+    return {"messages": messages_to_add}
 
 
-def router_step(state: State):
-    # Run the augmented LLM with structured output to serve as routing logic
-    decision = router.invoke(
-        [
-            prompts.prompt_formulas,
-            state["messages"][-1],
-        ]
-    )
-    return {"decision": decision.step}
+def chatbot_node(state: State) -> dict:
+    """Nodo Chatbot: Ejecuta la cadena RAG principal de Niilo."""
+    print("--- Ejecutando Nodo: chatbot_node ---")
+    session_id = state['messages'][0].additional_kwargs.get('session_id') if state['messages'] else None
 
-def should_calculate(state: State):
-    # Return the node name you want to visit next
-    return state["decision"]
+    if not session_id:
+        print("Error crítico: Falta session_id en el estado.")
+        return {"messages": [agent.AIMessage(content="Lo siento, hubo un error interno (id de sesión).")]}
+
+    config = {"configurable": {"session_id": session_id}}
+    last_human_message = get_last_human_message(state['messages'])
+    msg_id = str(uuid4())
+    last_human_message = HumanMessage(content=last_human_message, id=msg_id)
+
+    if not last_human_message:
+        # Si el último mensaje fue del sistema (p.ej., pidiendo parámetros), Niilo no debería decir nada nuevo aún.
+        print("No hay nuevo mensaje humano. Niilo espera respuesta.")
+        # Devolver estado sin añadir mensaje de Niilo
+        return {}
+
+    # Ejecuta la cadena RAG con historial
+    try:
+        # Pasamos el contenido del último mensaje humano como 'question'
+        ai_response_content = agent.chain_with_history.invoke({"question": last_human_message.content}, config=config)
+
+        # --- Añadir explicaciones si fórmulas 'is_calculated=false' ---
+        analyzed_formulas = state.get("analyzed_formulas", [])
+        formulas_to_explain = [f for f in analyzed_formulas if not f.is_calculated]
+        explanation_suffix = ""
+        if formulas_to_explain:
+            explanation_suffix = "\n\nSobre las fórmulas que mencionaste y no calculamos:\n"
+            # Aquí Niilo debería generar la explicación como parte de su lógica interna
+            # El prompt ya le indica que lo haga. No es necesario añadir texto aquí,
+            # PERO podrías pasarle explícitamente qué explicar si el prompt no es suficiente.
+            # Por simplicidad, confiamos en el prompt de Niilo.
+            # for f_info in formulas_to_explain:
+            #    explanation_suffix += f"- **{f_info.name} ({f_info.key})**: [Explicación breve aquí]\n"
+            pass # Confiar en el prompt de Niilo para manejar esto internamente basado en su contexto.
+
+        final_content = ai_response_content # + explanation_suffix # Descomentar si el prompt no lo hace solo
+
+        print(f"Respuesta de Niilo (RAG): {final_content}")
+        return {"messages": [agent.AIMessage(content=final_content)]}
+
+    except Exception as e:
+        print(f"Error en la cadena RAG de Niilo: {e}")
+        return {"messages": [agent.AIMessage(content="Uff, tuve un problema procesando eso. ¿Intentamos de nuevo?")]}
 
 
+# --- Construcción del Grafo ---
+builder = StateGraph(State)
 
-builder = StateGraph(state_schema=State)
-builder.add_node("chatbot", chatbot)
-builder.add_node("formula", make_calculations)
-builder.add_node("router", router_step)
+# Añadir Nodos
+builder.add_node("router", route_request)
+builder.add_node("analyze_formulas", analyze_formulas_node)
+builder.add_node("calculate", calculation_node)
+builder.add_node("chatbot", chatbot_node)
 
+# Definir Flujo
 builder.add_edge(START, "router")
-builder.add_conditional_edges("router", should_calculate, {
-    "formula": "formula",
-    "chatbot": "chatbot"
-})
-builder.add_edge("formula", "chatbot")
-builder.add_edge("chatbot", END)
+builder.add_conditional_edges(
+    "router",
+    lambda state: state["decision"], # Función de condición basada en la salida del router
+    {
+        "formula": "analyze_formulas", # Si es 'formula', analiza
+        "chatbot": "chatbot",        # Si es 'chatbot', va directo a Niilo
+    }
+)
+builder.add_edge("analyze_formulas", "calculate") # Después de analizar, siempre intenta calcular/pedir params
+builder.add_edge("calculate", "chatbot") # Después de calcular/pedir, deja que Niilo responda
+builder.add_edge("chatbot", END) # La respuesta de Niilo es el final del turno
 
-
-# Compile the graph using the builder from agent.py
+# Compilar el Grafo con Checkpointer
 graph = builder.compile(checkpointer=agent.checkpoint)
 
-        
+
+# --- Funciones de Invocación y Streaming (Adaptadas) ---
+
 def stream_graph_updates(user_input: str, session_id: str):
-    """Handles user input, processes through the graph, and returns a response."""
-    config = {"configurable": {"session_id": session_id, 'thread_id': session_id}}
-    events =  graph.stream({"messages": [{"role": "user", "content": user_input, "session_id": session_id}]}, config)
+    """Maneja input, procesa en grafo, y produce eventos de streaming."""
+    config = {"configurable": {"thread_id": session_id}}
+    initial_message = agent.HumanMessage(
+        content=user_input,
+        additional_kwargs={"session_id": session_id} # Importante para el estado inicial
+    )
+    # Usar stream_mode="updates" para obtener salidas de nodos a medida que ocurren
+    events = graph.stream({"messages": [initial_message]}, config=config, stream_mode="updates")
+
     for event in events:
-        for value in event.values():
-            if "messages" in value:  # Check if "messages" key exists
-                if isinstance(value["messages"], list):
-                    last_message = value["messages"][-1]
-                else:
-                    last_message = value["messages"]
-                if hasattr(last_message, 'content'):
-                    yield {"assistant_response": last_message.content}
-                elif isinstance(last_message, dict) and "content" in last_message:
-                    yield {"assistant_response": last_message["content"]}
-                elif isinstance(last_message, str):
-                    yield {"assistant_response": last_message}
-                else:
-                    yield {"assistant_response": "(Unexpected response format)"}
-            elif "decision" in value: #check if decision key exists
-                yield {"decision": value["decision"]} #yield the decision value
+        for node_name, node_output in event.items():
+        
+            print(f"Output from node '{node_name}': {node_output}")
+            # Busca mensajes añadidos por el nodo actual
+            if isinstance(node_output, dict) and "messages" in node_output:
+                new_messages = node_output["messages"]
+                if isinstance(new_messages, list) and new_messages:
+                    # Solo produce el contenido del último mensaje AI añadido por este nodo
+                    last_msg = new_messages[-1]
+                    if isinstance(last_msg, agent.AIMessage):
+                        yield {"assistant_response": last_msg.content}
+                    elif isinstance(last_msg, dict) and last_msg.get("type") == "ai": # Compatibilidad
+                        yield {"assistant_response": last_msg.get("content", "")}
+            elif not node_output:
+                yield {"event_value": "pass"}
+            elif "decision" in node_output: #check if decision key exists
+                yield {"decision": node_output["decision"]} #yield the decision value
             else:
-                 yield {"event_value": str(value)} #yield the entire event value for debugging.
+                 yield {"event_value": str(node_output)} #yield the entire event value for debugging.
+            # Podrías añadir yields para otros datos del estado si es necesario (ej: 'decision')
 
 
-def get_response(user_input: str, session_id: str):
-    nodes = list()
-    for response in stream_graph_updates(user_input, session_id):
-        nodes.append(response)
+def get_response(user_input: str, session_id: str) -> List[dict]:
+    """Obtiene la(s) respuesta(s) del asistente para una entrada de usuario."""
+    responses = []
+    stream = stream_graph_updates(user_input, session_id)
+    for chunk in stream:
+        if "assistant_response" in chunk:
+            responses.append(chunk) # Acumula todas las respuestas generadas en el turno
 
-    return nodes
+    # Si no hubo respuestas en el stream (raro), intenta obtener el estado final
+    if not responses:
+         try:
+            final_state = graph.get_state({"configurable": {"thread_id": session_id}})
+            if final_state and 'messages' in final_state:
+                 last_message = final_state['messages'][-1]
+                 if isinstance(last_message, agent.AIMessage):
+                      responses.append({"assistant_response": last_message.content})
+         except Exception as e:
+             print(f"Error obteniendo estado final: {e}")
+
+    return responses if responses else [{"assistant_response": "(No se generó respuesta)"}]
+
 
 def get_steps(session_id: str):
     """Retrieves the chat history from the graph."""
