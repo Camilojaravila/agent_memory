@@ -10,12 +10,16 @@ from langchain_core.output_parsers import StrOutputParser
 from postgres_db import get_by_session_id, checkpoint
 from weaviate_db import get_weaviate_retriever
 from prompts import prompt_niilo
+from configs import get_secret
 
 # --- Configuración LLM ---
 # Asegúrate de tener las variables de entorno o credenciales configuradas
+secret_name = os.environ.get("AGENT_SECRET_NAME")
+agent_configs: dict = get_secret(secret_name)
 PROJECT_ID = os.environ.get("GOOGLE_PROJECT_ID")
 LOCATION = os.environ.get("GOOGLE_LOCATION", "us-central1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.0-flash")
+MODEL_NAME = agent_configs.get("MODEL_NAME", "gemini-2.0-flash")
+os.environ['GOOGLE_API_KEY'] = agent_configs.get('GOOGLE_API_KEY')
 
 # LLM para conversación (Niilo) - Más creativo
 llm_chat = ChatGoogleGenerativeAI(

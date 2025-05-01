@@ -7,17 +7,19 @@ from langchain_core.messages import BaseMessage
 from typing import List
 from sqlalchemy import create_engine, text
 from models import create_tables
+from configs import get_secret
 
 
-load_dotenv('.env')
+secret_name = os.environ.get("DB_SECRET_NAME")
+db_settings: dict = get_secret(secret_name)
 
-DB_URI = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
+DB_URI = f"postgresql://{db_settings.get('POSTGRES_USER')}:{db_settings.get('POSTGRES_PASSWORD')}@{db_settings.get('POSTGRES_HOST')}:{db_settings.get('POSTGRES_PORT')}/{db_settings.get('POSTGRES_DB')}"
 connection_kwargs = {
     "autocommit": True,
     "prepare_threshold": 0,
 }
 
-table_name = os.getenv('TABLE_HISTORY_NAME')
+table_name = db_settings.get('TABLE_HISTORY_NAME')
 
 db_pool = ConnectionPool(
     conninfo=DB_URI,

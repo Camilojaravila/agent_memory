@@ -8,6 +8,7 @@ from uuid import uuid4
 from formulas import formulas_list
 import json
 import logging
+import uuid
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -94,6 +95,13 @@ def calculation_node(state: State) -> dict:
     analyzed_formulas: List[FormulaInfo] = state.get("analyzed_formulas", [])
     messages_to_add: List[agent.BaseMessage] = []
     missing_params_map = {} # { 'formula_key': ['param1', 'param2'] }
+    ai_kwargs = {
+        "created_at": time_now(),
+        # Podrías añadir más info relevante del AI aquí:
+        "model_used": agent.MODEL_NAME, # Si está accesible
+        # "token_usage": response_metadata.get("usage_metadata"), # Si obtienes metadata
+    }
+
     formulas_needing_calc = [f for f in analyzed_formulas if f.is_calculated]
     if not formulas_needing_calc:
         logger.info("No hay fórmulas marcadas para cálculo. Pasando al chatbot.")
@@ -124,15 +132,26 @@ def calculation_node(state: State) -> dict:
                  result = formulas.calculate_formula(formula_info.key, numeric_params)
                  if result is not None:
                      msg_content = f"Calculé el {formula_info.name} ({formula_info.key}): {result}"
-                     messages_to_add.append(agent.AIMessage(content=msg_content))
+                     messages_to_add.append(agent.AIMessage(
+                         content=msg_content, 
+                         id = f"formula_{uuid.uuid4()}",
+                         additional_kwargs=ai_kwargs
+                         ))
                      logger.info(msg_content)
                  else:
                      msg_content = f"No pude calcular el {formula_info.name} ({formula_info.key}) con los datos."
-                     messages_to_add.append(agent.AIMessage(content=msg_content))
+                     messages_to_add.append(agent.AIMessage(
+                                                            content=msg_content, 
+                                                            id = f"formula_{uuid.uuid4()}",
+                                                            additional_kwargs=ai_kwargs
+                                                            ))
                      logger.info(msg_content)
              except Exception as e:
                  logger.error(f"Error calculando {formula_info.key}: {e}", exc_info=True)
-                 messages_to_add.append(agent.AIMessage(content=f"Tuve un problema al calcular el {formula_info.name}."))
+                 messages_to_add.append(agent.AIMessage(content=f"Tuve un problema al calcular el {formula_info.name}.",
+                                                        id = f"formula_{uuid.uuid4()}",
+                                                        additional_kwargs=ai_kwargs
+                                                        ))
         else:
             # --- Registrar Parámetros Faltantes ---
             missing_params_map[formula_info.key] = missing
@@ -144,7 +163,11 @@ def calculation_node(state: State) -> dict:
             formula_name = next((f.name for f in analyzed_formulas if f.key == key), key)
             prompt_missing += f"- Para **{formula_name} ({key})**: {', '.join(params)}\n"
         prompt_missing += "¿Me los podrías dar?"
-        messages_to_add.append(agent.AIMessage(content=prompt_missing))
+        messages_to_add.append(agent.AIMessage(
+            content=prompt_missing,
+            id = f"formula_{uuid.uuid4()}",
+            additional_kwargs=ai_kwargs
+            ))
         logger.info("Generando petición de parámetros.")
     # Devuelve los mensajes generados (resultados o peticiones)
     return {"messages": messages_to_add}
@@ -154,13 +177,22 @@ def chatbot_node(state: State) -> dict:
     """Nodo Chatbot: Ejecuta la cadena RAG principal de Niilo."""
     logger.info("--- Ejecutando Nodo: chatbot_node ---")
     session_id = state['messages'][0].additional_kwargs.get('session_id') if state['messages'] else None
+    ai_kwargs = {
+        "created_at": time_now(),
+        # Podrías añadir más info relevante del AI aquí:
+        "model_used": agent.MODEL_NAME, # Si está accesible
+        # "token_usage": response_metadata.get("usage_metadata"), # Si obtienes metadata
+    }
     if not session_id:
         logger.error("Error crítico: Falta session_id en el estado.")
-        return {"messages": [agent.AIMessage(content="Lo siento, hubo un error interno (id de sesión).")]}
+        return {"messages": [agent.AIMessage(
+            content="Lo siento, hubo un error interno (id de sesión).", 
+            id= f"chatbot_{uuid.uuid4()}",
+            additional_kwargs=ai_kwargs)
+            ]}
     config = {"configurable": {"session_id": session_id}}
     last_human_message = get_last_human_message(state['messages'])
-    msg_id = str(uuid4())
-    last_human_message = HumanMessage(content=last_human_message, id=msg_id)
+
     if not last_human_message:
         # Si el último mensaje fue del sistema (p.ej., pidiendo parámetros), Niilo no debería decir nada nuevo aún.
         logger.info("No hay nuevo mensaje humano. Niilo espera respuesta.")
@@ -188,10 +220,18 @@ def chatbot_node(state: State) -> dict:
         final_content = ai_response_content + explanation_suffix
         
         logger.info(f"Respuesta de Niilo (RAG): {final_content}")
-        return {"messages": [agent.AIMessage(content=final_content)]}
+        return {"messages": [agent.AIMessage(
+            content=final_content, 
+            id = f"chatbot_{uuid.uuid4()}",
+            additional_kwargs=ai_kwargs
+            )]}
     except Exception as e:
         logger.error(f"Error en la cadena RAG de Niilo: {e}", exc_info=True)
-        return {"messages": [agent.AIMessage(content="Uff, tuve un problema procesando eso. ¿Intentamos de nuevo?")]}
+        return {"messages": [agent.AIMessage(
+            content="Uff, tuve un problema procesando eso. ¿Intentamos de nuevo?", 
+            id = f"chatbot_{uuid.uuid4()}",
+            additional_kwargs=ai_kwargs
+            )]}
 
 # --- Construcción del Grafo ---
 builder = StateGraph(State)
@@ -225,9 +265,16 @@ graph = builder.compile(checkpointer=agent.checkpoint)
 def stream_graph_updates(user_input: str, session_id: str):
     """Maneja input, procesa en grafo, y produce eventos de streaming."""
     config = {"configurable": {"thread_id": session_id}}
+
+    additional_configs = {
+        "session_id": session_id,
+        "created_at": time_now(),
+        }
+
     initial_message = agent.HumanMessage(
         content=user_input,
-        additional_kwargs={"session_id": session_id} # Importante para el estado inicial
+        id = f"user_{uuid.uuid4()}",
+        additional_kwargs= additional_configs# Importante para el estado inicial
     )
     # Usar stream_mode="updates" para obtener salidas de nodos a medida que ocurren
     events = graph.stream({"messages": [initial_message]}, config=config, stream_mode="updates")
