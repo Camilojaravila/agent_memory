@@ -8,6 +8,8 @@ import schema
 import traceback
 from contextlib import asynccontextmanager
 from weaviate_db import connect_to_db, close_db
+import logging
+logger = logging.getLogger(__name__)
 
 
 tags_metadata = [
@@ -21,22 +23,22 @@ tags_metadata = [
     },
 ]
 
-version = "2.0.1"
+version = "2.0.2"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         connect_to_db()
-        print("Weaviate client connected successfully.")
+        logger.info("Weaviate client connected successfully.")
         yield
     except Exception as e:
-        print(f"Error connecting to Weaviate: {e}")
+        logger.error(f"Error connecting to Weaviate: {e}")
         # Optionally, you might want to handle this error more gracefully,
         # perhaps by setting a flag and checking it in your API endpoints.
     finally:
         close_db()
-        print("Weaviate client closed.")
+        logger.info("Weaviate client closed.")
 
 
 app = FastAPI(

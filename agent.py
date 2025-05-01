@@ -14,20 +14,20 @@ from prompts import prompt_niilo
 # --- Configuración LLM ---
 # Asegúrate de tener las variables de entorno o credenciales configuradas
 PROJECT_ID = os.environ.get("GOOGLE_PROJECT_ID")
-LOCATION = os.environ.get("GOOGLE_LOCATION", "us-central1") # O la región que uses
+LOCATION = os.environ.get("GOOGLE_LOCATION", "us-central1")
+MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.0-flash")
 
 # LLM para conversación (Niilo) - Más creativo
 llm_chat = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash-001", # Revisa el modelo más adecuado
+    model=MODEL_NAME, # Revisa el modelo más adecuado
     temperature=0.7, # Permite respuestas más naturales
     max_output_tokens=1024,
-    project=PROJECT_ID,
     # streaming=True # Habilita si necesitas streaming de tokens
 )
 
 # LLM para tareas estructuradas (Routing, Análisis Fórmulas, Extracción Params) - Preciso
 llm_structured = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash-001",
+    model=MODEL_NAME,
     temperature=0.0, # Determinista para JSON/Clasificación
     max_output_tokens=2048, # Ajusta si el JSON es grande
 )

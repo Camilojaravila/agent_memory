@@ -7,6 +7,16 @@ from langchain_core.messages import HumanMessage
 from uuid import uuid4
 from formulas import formulas_list
 import json
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Salida a consola
+        #logging.FileHandler("chatbot.log")  # También a archivo
+    ]
+)
+logger = logging.getLogger(__name__)
 
 
 def get_last_human_message(messages: List[agent.BaseMessage]) -> Optional[str]:
@@ -14,104 +24,90 @@ def get_last_human_message(messages: List[agent.BaseMessage]) -> Optional[str]:
     for msg in reversed(messages):
         if isinstance(msg, agent.HumanMessage):
             return msg.content
-    return None
+    return ""
 
 def route_request(state: State) -> dict:
     """Nodo Router: Decide si ir a 'formula' o 'chatbot'."""
-    print("--- Ejecutando Nodo: route_request ---")
+    logger.info("--- Ejecutando Nodo: route_request ---")
     last_human_message = get_last_human_message(state['messages'])
-
     if not last_human_message:
-        print("Advertencia: No se encontró mensaje humano para el routing. Defecto: chatbot.")
+        logger.warning("No se encontró mensaje humano para el routing. Defecto: chatbot.")
         return {"decision": "chatbot"}
-
     # Usa LLM estructurado para tomar la decisión
     router_runnable = prompts.prompt_router | agent.llm_structured.with_structured_output(RouterOutput)
     try:
         routing_decision: RouterOutput = router_runnable.invoke({"question": last_human_message})
-        print(f"Decisión del Router: {routing_decision.decision}")
+        logger.info(f"Decisión del Router: {routing_decision.decision}")
         return {"decision": routing_decision.decision}
     except Exception as e:
-        print(f"Error durante el routing: {e}. Defecto: chatbot.")
+        logger.error(f"Error durante el routing: {e}", exc_info=True)
         return {"decision": "chatbot"} # Fallback seguro
 
 def analyze_formulas_node(state: State) -> dict:
     """Nodo Análisis Fórmulas: Identifica fórmulas y la intención (calc/info)."""
-    print("--- Ejecutando Nodo: analyze_formulas_node ---")
+    logger.info("--- Ejecutando Nodo: analyze_formulas_node ---")
     last_human_message = get_last_human_message(state['messages'])
-    analyzed_formulas_list: List[FormulaInfo] = [] # Especifica el tipo esperado
-
+    analyzed_formulas_list: FormulaInfo = [] # Especifica el tipo esperado
     if not last_human_message:
-        print("Advertencia: No se encontró mensaje humano para analizar fórmulas.")
+        logger.warning("No se encontró mensaje humano para analizar fórmulas.")
     else:
         # Prepara el diccionario de entrada con AMBAS variables requeridas por el prompt
         input_data_for_prompt = {
             "question": last_human_message,
             "formulas_json": str(formulas_list) # Convierte la lista real a string JSON aquí
         }
-        print(f"Input para prompt_formula_analysis: {input_data_for_prompt.keys()}") # Debug
+        logger.debug(f"Input para prompt_formula_analysis: {input_data_for_prompt.keys()}")
 
-        # Construye el runnable (asegúrate que List[FormulaInfo] esté bien importado/definido)
-        # Si usas Python < 3.9, usa typing.List[FormulaInfo]
         analysis_runnable = prompts.prompt_formula_analysis | agent.llm_structured.with_structured_output(List_Formula)
-
         try:
             # Invoca el runnable con el diccionario de entrada completo
             analysis_result = analysis_runnable.invoke(input_data_for_prompt)
-
             # Procesa el resultado (debería ser List[FormulaInfo])
             if isinstance(analysis_result, list):
                 # Validación adicional opcional (ej: asegurar que los items son FormulaInfo)
                 analyzed_formulas_list = [f for f in analysis_result if isinstance(f, FormulaInfo)]
-                print(f"Fórmulas Analizadas (tipo {type(analysis_result)}): {[f.dict() for f in analyzed_formulas_list]}")
+                logger.info(f"Fórmulas Analizadas (tipo {type(analysis_result)}): {[f.dict() for f in analyzed_formulas_list]}")
             else:
                 # Manejar casos donde with_structured_output falle o devuelva otro tipo
-                print(f"Salida inesperada de analysis_runnable: {type(analysis_result)}. Se esperaba List[FormulaInfo].")
+                logger.warning(f"Salida inesperada de analysis_runnable: {type(analysis_result)}. Se esperaba FormulaInfo.")
                 # Podrías intentar parsear si es un AIMessage con JSON string, como fallback
                 if hasattr(analysis_result, 'content') and isinstance(analysis_result.content, str):
                     try:
                         parsed_list = json.loads(analysis_result.content)
                         validated_formulas = [FormulaInfo(**item) for item in parsed_list]
                         analyzed_formulas_list = validated_formulas
-                        print(f"Fórmulas Analizadas (parseado de string): {[f.dict() for f in analyzed_formulas_list]}")
+                        logger.info(f"Fórmulas Analizadas (parseado de string): {[f.dict() for f in analyzed_formulas_list]}")
                     except Exception as parse_err:
-                        print(f"Error parseando fallback JSON: {parse_err}")
+                        logger.error(f"Error parseando fallback JSON: {parse_err}", exc_info=True)
                 # Si no se puede procesar, la lista quedará vacía
-
         except Exception as e:
-            print(f"Error durante la invocación/procesamiento del análisis de fórmulas: {e}")
+            logger.error(f"Error durante la invocación/procesamiento del análisis de fórmulas: {e}", exc_info=True)
             import traceback
             traceback.print_exc()
             analyzed_formulas_list = [] # Resetea en caso de error
-
     # Devuelve la lista (posiblemente vacía) al estado
     return {"analyzed_formulas": analyzed_formulas_list}
 
 def calculation_node(state: State) -> dict:
     """Nodo Cálculo: Intenta calcular o pide parámetros."""
-    print("--- Ejecutando Nodo: calculation_node ---")
+    logger.info("--- Ejecutando Nodo: calculation_node ---")
     analyzed_formulas: List[FormulaInfo] = state.get("analyzed_formulas", [])
     messages_to_add: List[agent.BaseMessage] = []
     missing_params_map = {} # { 'formula_key': ['param1', 'param2'] }
-
     formulas_needing_calc = [f for f in analyzed_formulas if f.is_calculated]
-
     if not formulas_needing_calc:
-        print("No hay fórmulas marcadas para cálculo. Pasando al chatbot.")
+        logger.info("No hay fórmulas marcadas para cálculo. Pasando al chatbot.")
         # No añadir mensajes, el chatbot se encargará de explicar si es necesario
         return {}
-
     # --- Lógica de Extracción de Parámetros ---
     # Implementación básica: Buscar en el último mensaje (MEJORAR ESTO)
-    last_human_message = get_last_human_message(state['messages']) or ""
-
+    last_human_message = get_last_human_message(state['messages'])
     for formula_info in formulas_needing_calc:
         required = formula_info.params_required
         provided_values = {} # { 'param_name': value }
         missing = []
-
         # AQUÍ VA LA LÓGICA DE EXTRACCIÓN - Ejemplo Placeholder (NO USAR EN PRODUCCIÓN)
-        print(f"Buscando parámetros para {formula_info.key}: {required}")
+        logger.info(f"Buscando parámetros para {formula_info.key}: {required}")
         # Intenta extraerlos del último mensaje (esto es muy básico)
         # Necesitas una estrategia robusta: LLM dedicado, regex, etc.
         # Por ahora, asumiremos que no se encuentran para forzar la petición
@@ -120,7 +116,6 @@ def calculation_node(state: State) -> dict:
             #    provided_values[param] = extracted_value
             # else:
             missing.append(param) # Asume que falta por ahora
-
         if not missing:
              # --- Realizar Cálculo ---
              try:
@@ -130,19 +125,18 @@ def calculation_node(state: State) -> dict:
                  if result is not None:
                      msg_content = f"Calculé el {formula_info.name} ({formula_info.key}): {result}"
                      messages_to_add.append(agent.AIMessage(content=msg_content))
-                     print(msg_content)
+                     logger.info(msg_content)
                  else:
                      msg_content = f"No pude calcular el {formula_info.name} ({formula_info.key}) con los datos."
                      messages_to_add.append(agent.AIMessage(content=msg_content))
-                     print(msg_content)
+                     logger.info(msg_content)
              except Exception as e:
-                 print(f"Error calculando {formula_info.key}: {e}")
+                 logger.error(f"Error calculando {formula_info.key}: {e}", exc_info=True)
                  messages_to_add.append(agent.AIMessage(content=f"Tuve un problema al calcular el {formula_info.name}."))
         else:
             # --- Registrar Parámetros Faltantes ---
             missing_params_map[formula_info.key] = missing
-            print(f"Parámetros faltantes para {formula_info.key}: {missing}")
-
+            logger.info(f"Parámetros faltantes para {formula_info.key}: {missing}")
     # --- Generar Mensaje de Petición de Parámetros (si aplica) ---
     if missing_params_map:
         prompt_missing = "Para poder calcular, necesito algunos datos más:\n"
@@ -151,37 +145,31 @@ def calculation_node(state: State) -> dict:
             prompt_missing += f"- Para **{formula_name} ({key})**: {', '.join(params)}\n"
         prompt_missing += "¿Me los podrías dar?"
         messages_to_add.append(agent.AIMessage(content=prompt_missing))
-        print("Generando petición de parámetros.")
-
+        logger.info("Generando petición de parámetros.")
     # Devuelve los mensajes generados (resultados o peticiones)
     return {"messages": messages_to_add}
 
 
 def chatbot_node(state: State) -> dict:
     """Nodo Chatbot: Ejecuta la cadena RAG principal de Niilo."""
-    print("--- Ejecutando Nodo: chatbot_node ---")
+    logger.info("--- Ejecutando Nodo: chatbot_node ---")
     session_id = state['messages'][0].additional_kwargs.get('session_id') if state['messages'] else None
-
     if not session_id:
-        print("Error crítico: Falta session_id en el estado.")
+        logger.error("Error crítico: Falta session_id en el estado.")
         return {"messages": [agent.AIMessage(content="Lo siento, hubo un error interno (id de sesión).")]}
-
     config = {"configurable": {"session_id": session_id}}
     last_human_message = get_last_human_message(state['messages'])
     msg_id = str(uuid4())
     last_human_message = HumanMessage(content=last_human_message, id=msg_id)
-
     if not last_human_message:
         # Si el último mensaje fue del sistema (p.ej., pidiendo parámetros), Niilo no debería decir nada nuevo aún.
-        print("No hay nuevo mensaje humano. Niilo espera respuesta.")
+        logger.info("No hay nuevo mensaje humano. Niilo espera respuesta.")
         # Devolver estado sin añadir mensaje de Niilo
         return {}
-
     # Ejecuta la cadena RAG con historial
     try:
         # Pasamos el contenido del último mensaje humano como 'question'
         ai_response_content = agent.chain_with_history.invoke({"question": last_human_message.content}, config=config)
-
         # --- Añadir explicaciones si fórmulas 'is_calculated=false' ---
         analyzed_formulas = state.get("analyzed_formulas", [])
         formulas_to_explain = [f for f in analyzed_formulas if not f.is_calculated]
@@ -195,16 +183,15 @@ def chatbot_node(state: State) -> dict:
             # for f_info in formulas_to_explain:
             #    explanation_suffix += f"- **{f_info.name} ({f_info.key})**: [Explicación breve aquí]\n"
             pass # Confiar en el prompt de Niilo para manejar esto internamente basado en su contexto.
-
-        final_content = ai_response_content # + explanation_suffix # Descomentar si el prompt no lo hace solo
-
-        print(f"Respuesta de Niilo (RAG): {final_content}")
+        
+        # CORRECCIÓN: Usar ai_response_content en lugar de la variable indefinida s
+        final_content = ai_response_content + explanation_suffix
+        
+        logger.info(f"Respuesta de Niilo (RAG): {final_content}")
         return {"messages": [agent.AIMessage(content=final_content)]}
-
     except Exception as e:
-        print(f"Error en la cadena RAG de Niilo: {e}")
+        logger.error(f"Error en la cadena RAG de Niilo: {e}", exc_info=True)
         return {"messages": [agent.AIMessage(content="Uff, tuve un problema procesando eso. ¿Intentamos de nuevo?")]}
-
 
 # --- Construcción del Grafo ---
 builder = StateGraph(State)
@@ -244,11 +231,10 @@ def stream_graph_updates(user_input: str, session_id: str):
     )
     # Usar stream_mode="updates" para obtener salidas de nodos a medida que ocurren
     events = graph.stream({"messages": [initial_message]}, config=config, stream_mode="updates")
-
     for event in events:
         for node_name, node_output in event.items():
         
-            print(f"Output from node '{node_name}': {node_output}")
+            logger.debug(f"Output from node '{node_name}': {node_output}")
             # Busca mensajes añadidos por el nodo actual
             if isinstance(node_output, dict) and "messages" in node_output:
                 new_messages = node_output["messages"]

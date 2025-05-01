@@ -33,7 +33,7 @@ class State(TypedDict):
     decision: Optional[Literal["formula", "chatbot"]]
 
     # Resultado del análisis de fórmulas (lista de objetos FormulaInfo)
-    analyzed_formulas: Optional[List[FormulaInfo]]
+    analyzed_formulas: Optional[List_Formula]
 
     # Opcional: Podrías añadir un campo para parámetros extraídos si es necesario pasarlos explícitamente
     # extracted_params_for_calc: Optional[Dict[str, ExtractedParams]] # Ej: {'CAC': ExtractedParams(...)}
