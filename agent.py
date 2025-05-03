@@ -5,12 +5,13 @@ from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_core.runnables import RunnableMap, RunnablePassthrough
+from langchain_core.runnables import RunnableMap, RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from postgres_db import get_by_session_id, checkpoint
 from weaviate_db import get_weaviate_retriever
 from prompts import prompt_niilo
 from configs import get_secret
+from helpers import time_now
 
 # --- Configuración LLM ---
 # Asegúrate de tener las variables de entorno o credenciales configuradas
@@ -52,14 +53,31 @@ def format_docs(docs: List[BaseMessage]) -> str:
     info = "\n\n".join(doc.page_content for doc in docs if hasattr(doc, 'page_content'))
     return info
 
+def get_info_to_docs(info):
+    msg: HumanMessage = info['question']
+    return format_docs(retriever.invoke(msg.content))
+
+def add_kwargs_to_ai_message(message: AIMessage):
+    ai_kwargs = {
+        "created_at": time_now(),
+        # Podrías añadir más info relevante del AI aquí:
+        "model_used": MODEL_NAME, # Si está accesible
+        # "token_usage": response_metadata.get("usage_metadata"), # Si obtienes metadata
+    }
+
+    message.additional_kwargs.update(ai_kwargs)
+
+    return message
+
 # Construcción de la cadena RAG
 rag_chain_niilo = (
     RunnablePassthrough.assign( # Mantiene la pregunta original
-        context=(lambda x: format_docs(retriever.invoke(x["question"]))) # Invoca retriever y formatea
+        context=(lambda x: get_info_to_docs(x)) # Invoca retriever y formatea
     )
     | prompt_niilo # Aplica el prompt de Niilo (espera 'question' y 'context')
     | llm_chat # Usa el LLM conversacional
-    | StrOutputParser() # Obtiene la respuesta como string
+    | RunnableLambda(add_kwargs_to_ai_message)
+    #| StrOutputParser() # Obtiene la respuesta como string
 )
 
 # Añadir historial a la cadena RAG
@@ -77,3 +95,4 @@ def get_chat_messages(session_id: str) -> List[BaseMessage]:
     """Recupera los mensajes del historial para un session_id."""
     chat_history = get_by_session_id(session_id)
     return chat_history.messages if hasattr(chat_history, 'messages') else []
+

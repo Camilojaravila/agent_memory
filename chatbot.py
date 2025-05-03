@@ -3,7 +3,6 @@ from typing import List, Optional
 import agent, connection, formulas, prompts
 from chatbot_schemas import State, RouterOutput, FormulaInfo, ExtractedParams, List_Formula
 from helpers import time_now
-from langchain_core.messages import HumanMessage
 from uuid import uuid4
 from formulas import formulas_list
 import json
@@ -20,12 +19,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_last_human_message(messages: List[agent.BaseMessage]) -> Optional[str]:
+def get_last_human_message(messages: List[agent.BaseMessage]) -> Optional[agent.HumanMessage]:
     """Extrae el contenido del último mensaje humano."""
     for msg in reversed(messages):
         if isinstance(msg, agent.HumanMessage):
-            return msg.content
-    return ""
+            return msg
+    return None
 
 def route_request(state: State) -> dict:
     """Nodo Router: Decide si ir a 'formula' o 'chatbot'."""
@@ -37,7 +36,7 @@ def route_request(state: State) -> dict:
     # Usa LLM estructurado para tomar la decisión
     router_runnable = prompts.prompt_router | agent.llm_structured.with_structured_output(RouterOutput)
     try:
-        routing_decision: RouterOutput = router_runnable.invoke({"question": last_human_message})
+        routing_decision: RouterOutput = router_runnable.invoke({"question": last_human_message.content})
         logger.info(f"Decisión del Router: {routing_decision.decision}")
         return {"decision": routing_decision.decision}
     except Exception as e:
@@ -54,7 +53,7 @@ def analyze_formulas_node(state: State) -> dict:
     else:
         # Prepara el diccionario de entrada con AMBAS variables requeridas por el prompt
         input_data_for_prompt = {
-            "question": last_human_message,
+            "question": last_human_message.content,
             "formulas_json": str(formulas_list) # Convierte la lista real a string JSON aquí
         }
         logger.debug(f"Input para prompt_formula_analysis: {input_data_for_prompt.keys()}")
@@ -94,6 +93,7 @@ def calculation_node(state: State) -> dict:
     logger.info("--- Ejecutando Nodo: calculation_node ---")
     analyzed_formulas: List[FormulaInfo] = state.get("analyzed_formulas", [])
     messages_to_add: List[agent.BaseMessage] = []
+    session_id = state['messages'][0].additional_kwargs.get('session_id') if state['messages'] else None
     missing_params_map = {} # { 'formula_key': ['param1', 'param2'] }
     ai_kwargs = {
         "created_at": time_now(),
@@ -177,16 +177,10 @@ def chatbot_node(state: State) -> dict:
     """Nodo Chatbot: Ejecuta la cadena RAG principal de Niilo."""
     logger.info("--- Ejecutando Nodo: chatbot_node ---")
     session_id = state['messages'][0].additional_kwargs.get('session_id') if state['messages'] else None
-    ai_kwargs = {
-        "created_at": time_now(),
-        # Podrías añadir más info relevante del AI aquí:
-        "model_used": agent.MODEL_NAME, # Si está accesible
-        # "token_usage": response_metadata.get("usage_metadata"), # Si obtienes metadata
-    }
     if not session_id:
         logger.error("Error crítico: Falta session_id en el estado.")
         return {"messages": [agent.AIMessage(
-            content="Lo siento, hubo un error interno (id de sesión).", 
+            content=f"Lo siento, hubo un error interno {session_id}.", 
             id= f"chatbot_{uuid.uuid4()}",
             additional_kwargs=ai_kwargs)
             ]}
@@ -201,7 +195,7 @@ def chatbot_node(state: State) -> dict:
     # Ejecuta la cadena RAG con historial
     try:
         # Pasamos el contenido del último mensaje humano como 'question'
-        ai_response_content = agent.chain_with_history.invoke({"question": last_human_message.content}, config=config)
+        ai_message: agent.AIMessage = agent.chain_with_history.invoke({"question": last_human_message}, config=config)
         # --- Añadir explicaciones si fórmulas 'is_calculated=false' ---
         analyzed_formulas = state.get("analyzed_formulas", [])
         formulas_to_explain = [f for f in analyzed_formulas if not f.is_calculated]
@@ -216,20 +210,29 @@ def chatbot_node(state: State) -> dict:
             #    explanation_suffix += f"- **{f_info.name} ({f_info.key})**: [Explicación breve aquí]\n"
             pass # Confiar en el prompt de Niilo para manejar esto internamente basado en su contexto.
         
-        # CORRECCIÓN: Usar ai_response_content en lugar de la variable indefinida s
-        final_content = ai_response_content + explanation_suffix
+
+        final_content = ai_message.content + explanation_suffix
         
         logger.info(f"Respuesta de Niilo (RAG): {final_content}")
-        return {"messages": [agent.AIMessage(
-            content=final_content, 
-            id = f"chatbot_{uuid.uuid4()}",
-            additional_kwargs=ai_kwargs
-            )]}
+        ai_message.__setattr__('content', final_content)
+        return {"messages": [ai_message]}
     except Exception as e:
         logger.error(f"Error en la cadena RAG de Niilo: {e}", exc_info=True)
+        try:
+            ai_id = ai_message.id
+            ai_kwargs = ai_message.additional_kwargs
+        except:
+            ai_id = f"chatbot_{uuid.uuid4()}"
+            ai_kwargs = {
+                "created_at": time_now(),
+                # Podrías añadir más info relevante del AI aquí:
+                "model_used": agent.MODEL_NAME, # Si está accesible
+                # "token_usage": response_metadata.get("usage_metadata"), # Si obtienes metadata
+            }
+        
         return {"messages": [agent.AIMessage(
             content="Uff, tuve un problema procesando eso. ¿Intentamos de nuevo?", 
-            id = f"chatbot_{uuid.uuid4()}",
+            id = ai_id,
             additional_kwargs=ai_kwargs
             )]}
 
@@ -264,7 +267,7 @@ graph = builder.compile(checkpointer=agent.checkpoint)
 
 def stream_graph_updates(user_input: str, session_id: str):
     """Maneja input, procesa en grafo, y produce eventos de streaming."""
-    config = {"configurable": {"thread_id": session_id}}
+    config = {"configurable": {"thread_id": session_id, "session_id": session_id,}}
 
     additional_configs = {
         "session_id": session_id,
@@ -280,6 +283,7 @@ def stream_graph_updates(user_input: str, session_id: str):
     events = graph.stream({"messages": [initial_message]}, config=config, stream_mode="updates")
     for event in events:
         for node_name, node_output in event.items():
+            act_time = time_now()
         
             logger.debug(f"Output from node '{node_name}': {node_output}")
             # Busca mensajes añadidos por el nodo actual
@@ -289,15 +293,32 @@ def stream_graph_updates(user_input: str, session_id: str):
                     # Solo produce el contenido del último mensaje AI añadido por este nodo
                     last_msg = new_messages[-1]
                     if isinstance(last_msg, agent.AIMessage):
-                        yield {"assistant_response": last_msg.content}
+                        yield {
+                            "assistant_response": last_msg.content,
+                            "id": last_msg.id,
+                            "created_at": last_msg.additional_kwargs.get('created_at', act_time),
+                            }
                     elif isinstance(last_msg, dict) and last_msg.get("type") == "ai": # Compatibilidad
-                        yield {"assistant_response": last_msg.get("content", "")}
+                        yield {
+                            "assistant_response": last_msg.get("content", ""),
+                            "id": last_msg.get("id"),
+                            "created_at": last_msg.get("additional_kwargs").get('created_at', act_time),
+                            }
             elif not node_output:
-                yield {"event_value": "pass"}
+                yield {
+                    "event_value": "pass",
+                    "created_at": act_time,
+                       }
             elif "decision" in node_output: #check if decision key exists
-                yield {"decision": node_output["decision"]} #yield the decision value
+                yield {
+                    "decision": node_output["decision"],
+                    "created_at": act_time,
+                    } #yield the decision value
             else:
-                 yield {"event_value": str(node_output)} #yield the entire event value for debugging.
+                 yield {
+                     "event_value": str(node_output),
+                     "created_at": act_time,
+                     } #yield the entire event value for debugging.
             # Podrías añadir yields para otros datos del estado si es necesario (ej: 'decision')
 
 
@@ -308,7 +329,6 @@ def get_response(user_input: str, session_id: str) -> List[dict]:
     for chunk in stream:
         if "assistant_response" in chunk:
             responses.append(chunk) # Acumula todas las respuestas generadas en el turno
-
     # Si no hubo respuestas en el stream (raro), intenta obtener el estado final
     if not responses:
          try:
@@ -318,7 +338,7 @@ def get_response(user_input: str, session_id: str) -> List[dict]:
                  if isinstance(last_message, agent.AIMessage):
                       responses.append({"assistant_response": last_message.content})
          except Exception as e:
-             print(f"Error obteniendo estado final: {e}")
+             logger.error(f"Error obteniendo estado final: {e}")
 
     return responses if responses else [{"assistant_response": "(No se generó respuesta)"}]
 
@@ -329,12 +349,43 @@ def get_steps(session_id: str):
     return graph.get_state(config)
 
 def get_history(session_id: str):
-    return agent.get_chat_messages(session_id)
+    messages = agent.get_chat_messages(session_id)
+    user_session = connection.get_session_user(session_id)
+    messages_id = [m.id for m in messages]
+    info = connection.get_message_revision(messages_id)
+    messages_info = {m.id: m for m in info}
+    resp = []
+
+    for message in messages:
+        message_info = messages_info.get(message.id, {})
+        structured_message = {
+            "message_id": message.id,
+            "session_id": session_id,
+            "user_id": user_session.user_id,
+            "content": message.content,
+            "type": message.type,
+            "created_at": message.additional_kwargs.get('created_at'),
+            "like": message_info.get("like", False),
+            "feedback": message_info.get("feedback", []),
+            "observations": message_info.get("observations", ''),
+        }
+        resp.append(structured_message)
+
+    return resp
 
 def get_session_ids(user_id: str):
     sessions = connection.get_sessions_by_user(user_id)
-    
-    return [s.session_id for s in sessions]
+    resp = []
+    for session in sessions:
+        user_message = agent.get_chat_messages(str(session.session_id))
+        resp.append({
+            'session_id': session.session_id,
+            'created_at': session.created_at,
+            'last_update': session.updated_at,
+            'user_id': session.user_id,
+            'first_message': user_message[0].content
+        })
+    return resp
 
 def get_new_session_id(**kwargs):
     data = dict(**kwargs)

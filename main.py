@@ -23,7 +23,7 @@ tags_metadata = [
     },
 ]
 
-version = "2.1.0"
+version = "2.2.0"
 
 
 @asynccontextmanager
@@ -64,7 +64,7 @@ async def get_conversations(user_id: str):
     """
     try:
         sessions = chatbot.get_session_ids(user_id)
-        return {"session_ids": sessions}
+        return {"chats": sessions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -88,7 +88,9 @@ async def chat(request: schema.ChatRequest):
         if not final_response:
             raise HTTPException(status_code=500, detail="No assistant response received.")
         chatbot.update_timestamp(request.session_id)
-        return {"assistant_response": final_response[-1]['assistant_response'], "nodes": final_response}
+        info = dict(**final_response[-1])
+        info['nodes'] = final_response
+        return info
 
     except Exception as e:
         print(traceback.format_exc())

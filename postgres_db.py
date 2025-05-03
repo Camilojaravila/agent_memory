@@ -55,22 +55,45 @@ class PostgresChatHistory():
     """Postgres-backed chat message history using LangChain's PostgresChatMessageHistory."""
 
     def __init__(self, session_id:str):
+        # Consider applying the connection_string fix to init_memory if not already done
         history = init_memory(session_id)
         self.chat_history = history
+        self.session_id = session_id
 
     def add_messages(self, messages: List[BaseMessage]) -> None:
         """Stores messages in the Postgres database"""
-        for message in messages:
-            self.chat_history.add_message(message)
+        # Now, call the underlying standard method
+        try:
+            # Note: The standard PostgresChatMessageHistory doesn't have add_messages (plural)
+            # It has add_message (singular). The checkpointer likely calls add_message repeatedly.
+            # If LangGraph calls your wrapper's add_messages (plural), you need the loop.
+            # If LangGraph somehow calls the underlying add_message directly, this wrapper method might not even be hit by the checkpointer.
+            # Let's assume for now your wrapper *is* somehow involved or you call it manually.
+            # A more direct test might involve subclassing PostgresChatMessageHistory itself.
+            for message in messages:
+                self.chat_history.add_message(message) # Call standard add_message
+
+        except Exception as e:
+            print(f"Error during self.chat_history.add_message: {e}")
+            import traceback
+            traceback.print_exc()
+
 
     def get_messages(self) -> List[BaseMessage]:
         """Retrieves messages from the database"""
-        return self.chat_history.messages
-    
+        return self.chat_history.messages # Use the property
+
     @property
     def messages(self) -> List[BaseMessage]:
         """Retrieves messages from the database."""
-        return self.chat_history.get_messages()  # Ensure it returns a list of BaseMessage objects
+        # Call the underlying get_messages method or messages property
+        try:
+            # The standard class uses the .messages property primarily
+            return self.chat_history.messages
+        except Exception as e:
+            print(f"Error during self.chat_history.messages: {e}")
+            return []
+
 
     def clear(self) -> None:
         """Deletes chat history for a session"""

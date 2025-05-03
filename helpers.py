@@ -16,4 +16,4 @@ def time_now():
 
     # Convert the UTC time to Bogota time.
     bogota_now = utc_now.astimezone(bogota_timezone)
-    return bogota_now
+    return bogota_now.isoformat()
