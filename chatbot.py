@@ -353,7 +353,7 @@ def get_history(session_id: str):
     user_session = connection.get_session_user(session_id)
     messages_id = [m.id for m in messages]
     info = connection.get_message_revision(messages_id)
-    messages_info = {m.id: m for m in info}
+    messages_info = {m.message_id: m.__dict__ for m in info}
     resp = []
 
     for message in messages:

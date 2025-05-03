@@ -25,7 +25,7 @@ tags_metadata = [
 ]
 
 env_name = os.environ.get("ENV")
-version = f"2.2.1-{env_name}"
+version = f"2.2.2-{env_name}"
 
 
 @asynccontextmanager
@@ -70,7 +70,7 @@ async def get_conversations(user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/conversations/{user_id}", tags=["Conversations"])
+@app.post("/api/conversations/{user_id}", tags=["Conversations"], response_model=schema.NewSession)
 async def new_conversation(user_id: str):
     """Creates a new session and returns the session ID."""
     session_id = str(uuid4())
@@ -98,7 +98,7 @@ async def chat(request: schema.ChatRequest):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/messages/chat/{session_id}", tags=["Messages"])
+@app.get("/api/messages/chat/{session_id}", tags=["Messages"], response_model=schema.List[schema.ConversationHistory])
 async def get_chat_history(session_id: str):
     try:
         history = chatbot.get_history(session_id)
@@ -106,7 +106,7 @@ async def get_chat_history(session_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.put("/api/messages/update/", tags=["Messages"])
+@app.put("/api/messages/update/", tags=["Messages"], response_model=schema.Message)
 async def update_message(body: schema.MessageUpdate):
     try:
         info = body.__dict__

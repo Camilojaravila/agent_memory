@@ -64,7 +64,7 @@ def create_message_revision(data: dict) -> models.MessageInfo:
 
     return db_new
 
-def get_message_revision(message_id: list) -> models.MessageInfo:
+def get_message_revision(message_id: list) -> List[models.MessageInfo]:
     engine = get_db_engine()
     with Session(engine) as session:
         query = session.query(

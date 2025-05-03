@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 from uuid import UUID
 from datetime import datetime
 
@@ -27,5 +27,25 @@ class SessionList(BaseModel):
 class MessageUpdate(BaseModel):
     message_id: str
     like: bool = True,
-    feedbacks: List[str]
+    feedback: List[str]
     observations: Optional[str]
+
+
+class NewSession(BaseModel):
+    session_id: str
+    user_id: str
+
+
+class ConversationHistory(BaseModel):
+    message_id: Optional[Union[UUID, str]]
+    session_id: Union[UUID, str]
+    user_id: Union[UUID, str]
+    content: str
+    type: Literal['human', 'ai']
+    created_at: Optional[datetime]
+    like: bool
+    feedback: List[str]
+    observations: str
+
+class Message(MessageUpdate):
+    created_at: datetime
