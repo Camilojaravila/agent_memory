@@ -9,6 +9,7 @@ import traceback
 from contextlib import asynccontextmanager
 from weaviate_db import connect_to_db, close_db
 import logging
+import os
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +24,8 @@ tags_metadata = [
     },
 ]
 
-version = "2.2.0"
+env_name = os.environ.get("ENV")
+version = f"2.2.1-{env_name}"
 
 
 @asynccontextmanager

@@ -12,8 +12,11 @@ from configs import get_secret
 
 secret_name = os.environ.get("DB_SECRET_NAME")
 db_settings: dict = get_secret(secret_name)
+env_name = os.environ.get("ENV")
+host = db_settings.get('POSTGRES_HOST') if env_name == 'local' else db_settings.get('POSTGRES_HOST_PRIVATE') 
 
-DB_URI = f"postgresql://{db_settings.get('POSTGRES_USER')}:{db_settings.get('POSTGRES_PASSWORD')}@{db_settings.get('POSTGRES_HOST')}:{db_settings.get('POSTGRES_PORT')}/{db_settings.get('POSTGRES_DB')}"
+
+DB_URI = f"postgresql://{db_settings.get('POSTGRES_USER')}:{db_settings.get('POSTGRES_PASSWORD')}@{host}:{db_settings.get('POSTGRES_PORT')}/{db_settings.get('POSTGRES_DB')}"
 connection_kwargs = {
     "autocommit": True,
     "prepare_threshold": 0,
