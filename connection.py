@@ -56,13 +56,24 @@ def update_user_session(session_id: str, info: dict) -> models.UserSession:
 
 def create_message_revision(data: dict) -> models.MessageInfo:
     engine = get_db_engine()
+    msg_id = data['message_id']
     with Session(engine) as db:  # Use Session directly in a context manager
-        db_new = models.MessageInfo(**data)
-        db.add(db_new)
-        db.commit()
-        db.refresh(db_new)
+        query = db.query(
+            models.MessageInfo
+        ).filter(
+            models.MessageInfo.message_id == msg_id
+        )
+        if query.first():
+            query.update(data)
+            db.commit()
+            return query.first()
+        else:
+            db_new = models.MessageInfo(**data)
+            db.add(db_new)
+            db.commit()
+            db.refresh(db_new)
 
-    return db_new
+            return db_new
 
 def get_message_revision(message_id: list) -> List[models.MessageInfo]:
     engine = get_db_engine()
