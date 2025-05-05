@@ -279,6 +279,9 @@ def stream_graph_updates(user_input: str, session_id: str):
         id = f"user_{uuid.uuid4()}",
         additional_kwargs= additional_configs# Importante para el estado inicial
     )
+
+    logger.info(f"--- Input del ususario: {user_input} ---")
+
     # Usar stream_mode="updates" para obtener salidas de nodos a medida que ocurren
     events = graph.stream({"messages": [initial_message]}, config=config, stream_mode="updates")
     for event in events:
