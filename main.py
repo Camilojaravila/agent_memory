@@ -25,7 +25,7 @@ tags_metadata = [
 ]
 
 env_name = os.environ.get("ENV")
-version = f"2.2.3-{env_name}"
+version = f"2.2.4-{env_name}"
 
 
 @asynccontextmanager

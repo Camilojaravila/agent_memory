@@ -63,10 +63,10 @@ def analyze_formulas_node(state: State) -> dict:
             # Invoca el runnable con el diccionario de entrada completo
             analysis_result = analysis_runnable.invoke(input_data_for_prompt)
             # Procesa el resultado (debería ser List[FormulaInfo])
-            if isinstance(analysis_result, list):
+            if isinstance(analysis_result, List_Formula):
                 # Validación adicional opcional (ej: asegurar que los items son FormulaInfo)
-                analyzed_formulas_list = [f for f in analysis_result if isinstance(f, FormulaInfo)]
-                logger.info(f"Fórmulas Analizadas (tipo {type(analysis_result)}): {[f.dict() for f in analyzed_formulas_list]}")
+                analyzed_formulas_list = [f for f in analysis_result.formulas if isinstance(f, FormulaInfo)]
+                logger.info(f"Fórmulas Analizadas (tipo {type(analysis_result)}): {[f.__dict__ for f in analyzed_formulas_list]}")
             else:
                 # Manejar casos donde with_structured_output falle o devuelva otro tipo
                 logger.warning(f"Salida inesperada de analysis_runnable: {type(analysis_result)}. Se esperaba FormulaInfo.")
@@ -383,7 +383,7 @@ def get_session_ids(user_id: str):
             'created_at': session.created_at,
             'last_update': session.updated_at,
             'user_id': session.user_id,
-            'first_message': user_message[0].content
+            'first_message': user_message[0].content if user_message else ""
         })
     return resp
 
