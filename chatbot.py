@@ -198,6 +198,7 @@ def chatbot_node(state: State) -> dict:
         ai_message: agent.AIMessage = agent.chain_with_history.invoke({"question": last_human_message}, config=config)
         # --- Añadir explicaciones si fórmulas 'is_calculated=false' ---
         analyzed_formulas = state.get("analyzed_formulas", [])
+        
         formulas_to_explain = [f for f in analyzed_formulas if not f.is_calculated]
         explanation_suffix = ""
         if formulas_to_explain:
@@ -211,7 +212,7 @@ def chatbot_node(state: State) -> dict:
             pass # Confiar en el prompt de Niilo para manejar esto internamente basado en su contexto.
         
 
-        final_content = ai_message.content + explanation_suffix
+        final_content = ai_message.content
         
         logger.info(f"Respuesta de Niilo (RAG): {final_content}")
         ai_message.__setattr__('content', final_content)
