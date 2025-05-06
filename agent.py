@@ -25,8 +25,8 @@ os.environ['GOOGLE_API_KEY'] = agent_configs.get('GOOGLE_API_KEY')
 # LLM para conversación (Niilo) - Más creativo
 llm_chat = ChatGoogleGenerativeAI(
     model=MODEL_NAME, # Revisa el modelo más adecuado
-    temperature=0.7, # Permite respuestas más naturales
-    max_output_tokens=1024,
+    temperature=0.9, # Permite respuestas más naturales
+    max_output_tokens=None,
     # streaming=True # Habilita si necesitas streaming de tokens
 )
 
