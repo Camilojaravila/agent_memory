@@ -6,6 +6,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.runnables import RunnableMap, RunnablePassthrough, RunnableLambda
+from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from postgres_db import get_by_session_id, checkpoint
 from weaviate_db import get_weaviate_retriever
@@ -48,9 +49,17 @@ retriever = get_weaviate_retriever(embeddings)
 
 # --- Cadena RAG para Niilo (Núcleo Conversacional) ---
 
-def format_docs(docs: List[BaseMessage]) -> str:
-    """Formatea los documentos recuperados en un string."""
+def format_docs(docs: List[Document]) -> str:
+    """
+    Formatea los documentos recuperados en un string.
+    for doc in docs:
+        print("***** Document *****")
+        print(doc.metadata)
+        print(doc.page_content[:100])
+    """
+
     info = "\n\n".join(doc.page_content for doc in docs if hasattr(doc, 'page_content'))
+
     return info
 
 def get_info_to_docs(info):
