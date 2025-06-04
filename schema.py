@@ -49,3 +49,12 @@ class ConversationHistory(BaseModel):
 
 class Message(MessageUpdate):
     created_at: datetime
+
+
+class Validation(BaseModel):
+    user_id: Union[UUID, str]
+    num_msg: int
+    interval: str
+    total_msg: int
+    msg_left: int
+    valid: int

@@ -2,7 +2,7 @@ from langgraph.graph import StateGraph, END, START
 from typing import List, Optional
 import agent, connection, formulas, prompts
 from chatbot_schemas import State, RouterOutput, FormulaInfo, ExtractedParams, List_Formula
-from helpers import time_now
+from helpers import time_now, get_past_time
 from uuid import uuid4
 from formulas import formulas_list
 import json
@@ -414,3 +414,21 @@ def update_message(info):
     info['created_at'] = time_now()
 
     return connection.create_message_revision(info)
+
+
+def get_validation(user_id: str, interval: str, num_msg: int):
+    first_date = get_past_time(interval_str=interval)
+    sessions = connection.get_sessions_by_user(user_id)
+    session_ids = [s.session_id for s in sessions]
+    counts = connection.count_chat_history_rows(session_ids, first_date)
+    msg_left = num_msg - sum(counts)
+    data = {
+        'user_id': user_id,
+        'interval': interval,
+        'num_msg': num_msg,
+        'total_msg': sum(counts),
+        'msg_left': msg_left,
+        'valid': msg_left > 0
+    }
+
+    return data

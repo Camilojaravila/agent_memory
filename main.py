@@ -224,8 +224,7 @@ async def get_graph_steps(session_id: str):
         session_id (str): El identificador de la sesión a investigar.
 
     Returns:
-        list: Una lista de objetos o diccionarios que representan cada paso
-        en el grafo de ejecución del agente.
+        schema.Validation: Validación para el usuario.
 
     Raises:
         HTTPException 500: Si ocurre un error al recuperar los pasos.
@@ -234,4 +233,30 @@ async def get_graph_steps(session_id: str):
         history = chatbot.get_steps(session_id)
         return history
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@app.get("/messages/{user_id}", tags=["Chatbot"])
+async def get_validation_message(user_id: str, interval: str, num_msg: int):
+    """
+    Obtiene el número de mensajes en un intervalo de tiempo.
+
+
+    Args:
+        user_id (str): El identificador de la sesión a investigar.
+        interval (str): Intervalo de tiempo a evaluar.
+        num_msg (int): Numero de mensajes máximo permitido.
+
+    Returns:
+        list: Una lista de objetos o diccionarios que representan cada paso
+        en el grafo de ejecución del agente.
+
+    Raises:
+        HTTPException 500: Si ocurre un error al recuperar los pasos.
+    """
+    try:
+        history = chatbot.get_validation(user_id, interval, num_msg)
+        return history
+    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

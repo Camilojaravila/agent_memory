@@ -2,6 +2,7 @@ from postgres_db import get_db_engine
 import models
 from sqlalchemy.orm import Session
 from typing import List, Dict
+from sqlalchemy import text
 
 
 def get_sessions_by_user(user_id: str) -> List[models.UserSession]:
@@ -85,3 +86,36 @@ def get_message_revision(message_id: list) -> List[models.MessageInfo]:
         )
 
         return query.all()
+    
+def count_chat_history_rows(session_ids: list[str], first_date) -> dict[str, int]:
+    """
+    Counts rows in 'chat_history' for each session_id using raw SQL.
+    
+    Args:
+        session_ids (list[str]): List of session IDs to filter by.
+        engine: SQLAlchemy engine (from create_engine).
+    
+    Returns:
+        dict[str, int]: {session_id: row_count} (e.g., {"abc123": 5}).
+    """
+    if not session_ids:
+        return {}
+
+    # Convert session_ids to a tuple for SQL IN clause
+    ids_tuple = tuple(session_ids)
+    
+    # Handle single-element tuple edge case (SQL requires trailing comma)
+    if len(ids_tuple) == 1:
+        ids_tuple = f"('{ids_tuple[0]}')"
+
+    sql = text(f"""
+        SELECT COUNT(*) as row_count
+        FROM chat_history
+        WHERE session_id IN {ids_tuple}
+        AND created_at > '{first_date}'
+    """)
+
+    engine = get_db_engine()
+    with Session(engine) as session:
+        result = session.execute(sql)
+        return [row.row_count for row in result]
