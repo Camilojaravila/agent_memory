@@ -20,7 +20,7 @@ def _time_now():
     return bogota_now
     
 def time_now():
-    return _time_now.isoformat()
+    return _time_now().isoformat()
 
 
 def get_past_time(interval_str):

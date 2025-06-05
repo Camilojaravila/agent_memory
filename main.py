@@ -29,7 +29,7 @@ tags_metadata = [
 ]
 
 env_name = os.environ.get("ENV", "local")
-version = f"2.2.8-{env_name}"
+version = f"2.2.9-{env_name}"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
